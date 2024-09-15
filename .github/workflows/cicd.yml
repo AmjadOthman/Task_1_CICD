@@ -1,0 +1,73 @@
+name: Deploy to IoT Hub
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y azure-cli
+          pip install azure-iot-hub
+
+      - name: Authenticate with Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Update CSV file
+        run: |
+          csv_file="iot_devices_credentials.csv"
+          device_id="device1"
+          device_key="device1_key"
+          primary_key="primary_key"
+          secondary_key="secondary_key"
+          iot_hub_host_name="iot-hub-name.azure-devices.net"
+          dps_id_scope="0ne00000000"
+          dps_device_id="device1"
+          dps_registration_id="registration1"
+
+          echo "DeviceId,DeviceKey,PrimaryKey,SecondaryKey,IotHubHostName,DpsIdScope,DpsDeviceId,DpsRegistrationId" > $csv_file
+          echo "$device_id,$device_key,$primary_key,$secondary_key,$iot_hub_host_name,$dps_id_scope,$dps_device_id,$dps_registration_id" >> $csv_file
+
+      - name: Create DPS enrollment
+        run: |
+          az iot dps enrollment create -n "$dps_id_scope" --eid "$dps_device_id" --attestation-type symmetrickey --auth-type login
+
+      - name: Register device with DPS
+        run: |
+          az iot device registration create -n "$dps_id_scope" --rid "$dps_device_id" --auth-type login
+
+      - name: Deploy to IoT Hub
+        uses: azure/iot-hub@v1
+        with:
+          csv_file: $csv_file
+          iot_hub_name: ${{ secrets.IOT_HUB_NAME }}
+          iot_hub_resource_group: ${{ secrets.IOT_HUB_RESOURCE_GROUP }}
+
+      - name: Update device twin
+        run: |
+          az iot hub device-identity update -d $device_id -n $iot_hub_name -g $iot_hub_resource_group --set properties.reported.firmwareVersion='1.2.3'
+
+      - name: Verify device status
+        uses: azure/iot-hub@v1
+        with:
+          iot_hub_name: ${{ secrets.IOT_HUB_NAME }}
+          iot_hub_resource_group: ${{ secrets.IOT_HUB_RESOURCE_GROUP }}
+          device_id: $device_id
+
+      - name: Receive reports from device
+        uses: azure/iot-hub@v1
+        with:
+          iot_hub_name: ${{ secrets.IOT_HUB_NAME }}
+          iot_hub_resource_group: ${{ secrets.IOT_HUB_RESOURCE_GROUP }}
+          device_id: $device_id
+          message_type: 'reportedProperties'
